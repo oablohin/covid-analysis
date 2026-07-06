@@ -38,6 +38,11 @@ md("""# Анализ поздних (постковидных) осложнен�
 > **Источник данных.** `updated_data.xlsx`, лист `0бщ.755` — общая выборка 755 пациентов.
 > Поздние осложнения закодированы в столбцах `DZ..EO`.
 
+Дополнительно: индивидуальный SHAP-разбор типичных пациентов (этап 3), панкреонекроз (этап 4),
+**сравнение осложнений по геновариантам — Ухань / Дельта / Омикрон (этап 5)** и **клинические схемы
+риска для ОНМК/ИМ, повторных пневмоний и тромбозов (этап 6)**. Помимо восьми осложнений рассмотрены
+ещё два поздних исхода — нарушения зрения/слуха и психоневрологические/обонятельные нарушения.
+
 **Методика.** Для каждого осложнения частота и отношения шансов (OR) с 95% доверительными
 интервалами оценены логистической регрессией; тренд по тяжести — логистической регрессией на
 порядковую группу КТ. Для частых исходов дополнительно построены многофакторные модели и
@@ -105,6 +110,8 @@ COMP_IDX = {
     130: 'ССЗ (новые)',
     132: 'Операции на венах',
     141: 'ОНМК / ИМ',
+    135: 'Зрение / слух',
+    136: 'Психика / ЦНС / обоняние',
 }
 OVERALL_IDX = 129  # общий флаг поздних осложнений
 
@@ -268,7 +275,7 @@ ax.set_title('Сила связи тяжести и риска осложнен�
 plt.tight_layout(); plt.show()
 """)
 md("""Все осложнения демонстрируют статистически значимый рост частоты с увеличением тяжести КТ
-(p < 0.001). Наиболее «зависимы от тяжести» пневмофиброз, ОНМК/ИМ, операции на венах и ХОБЛ/астма.""")
+(p < 0.001). Наиболее «зависимы от тяжести» пневмофиброз, ОНМК/ИМ, зрение/слух, ХОБЛ/астма и операции на венах.""")
 
 md("""## 1.3 Основные признаки, влияющие на риск поздних осложнений
 
@@ -348,10 +355,10 @@ md("""## 2.1 Матрица отношений шансов (фактор × о�
 Тепловая карта `log2(OR)`: красный — фактор повышает риск, синий — снижает. Звёздочкой отмечены
 значимые связи (p < 0.05).""")
 code("""
-comp8 = list(COMP_IDX.values())
-or_mat = pd.DataFrame(index=FACTOR_NAMES, columns=comp8, dtype=float)
-p_mat = pd.DataFrame(index=FACTOR_NAMES, columns=comp8, dtype=float)
-for cname in comp8:
+comp_names = list(COMP_IDX.values())
+or_mat = pd.DataFrame(index=FACTOR_NAMES, columns=comp_names, dtype=float)
+p_mat = pd.DataFrame(index=FACTOR_NAMES, columns=comp_names, dtype=float)
+for cname in comp_names:
     for fname in FACTOR_NAMES:
         orr, lo, hi, p = or_univariate(comp[cname], factors[fname], fname in CONT)
         or_mat.loc[fname, cname] = orr
@@ -372,7 +379,7 @@ plt.tight_layout(); plt.show()
 code("""
 # наиболее сильные значимые связи (по всей матрице)
 pairs = []
-for cname in comp8:
+for cname in comp_names:
     for fname in FACTOR_NAMES:
         orr, p = or_mat.loc[fname, cname], p_mat.loc[fname, cname]
         if p < 0.05 and np.isfinite(orr):
@@ -386,7 +393,7 @@ display(top)
 
 md("""## 2.2 Многофакторная логистическая регрессия (частые исходы)
 
-Для осложнений с достаточным числом случаев (повторные пневмонии, ЖКТ/НЖБП, ССЗ) строим
+Для осложнений с достаточным числом случаев (повторные пневмонии, ЖКТ/НЖБП, ССЗ, зрение/слух) строим
 многофакторные модели — скорректированные OR показывают независимый вклад каждого фактора.
 
 > **Как читать скорректированные OR.** В многофакторной модели знак эффекта может отличаться от
@@ -394,7 +401,7 @@ md("""## 2.2 Многофакторная логистическая регре�
 > Такой разворот знака — следствие взаимной корреляции факторов (отрицательное конфаундинг) либо
 > особенностей определения исхода, и не противоречит однофакторным оценкам, а уточняет их.""")
 code("""
-FREQUENT = ['Повторные пневмонии', 'ЖКТ / НЖБП', 'ССЗ (новые)']
+FREQUENT = ['Повторные пневмонии', 'ЖКТ / НЖБП', 'ССЗ (новые)', 'Зрение / слух']
 
 def multivariable(cname):
     X = factors.copy()
@@ -688,8 +695,8 @@ print('Готово к построению SHAP-разборов')
 """)
 code("""
 # waterfall-разбор репрезентативного пациента для каждого осложнения
-comp8 = list(COMP_IDX.values())
-for cname in comp8:
+comp_names = list(COMP_IDX.values())
+for cname in comp_names:
     y = comp[cname]
     rf = RandomForestClassifier(n_estimators=300, class_weight='balanced',
                                 random_state=RANDOM_STATE, n_jobs=-1).fit(RG, y)
@@ -772,13 +779,352 @@ md("""Панкреонекроз встречается преимуществе
 выделить нельзя; для построения прогнозной модели потребуется накопление случаев и добавление
 панкреас-специфичных лабораторных маркеров.""")
 
+# ============================================================ STAGE 5 genovariant
+md("""# ЭТАП 5. Осложнения в зависимости от геноварианта (Ухань / Дельта / Омикрон)
+
+Сравниваем поздние осложнения между геновариантами вируса. Выборка собрана из отдельных листов
+`УХАНЬ` (213), `ДЕЛЬТА` (272), `ОМИКРОН` (270) — это надёжнее, чем делить по году (год ≠ штамм).
+Референс для сравнений — **Ухань**.
+
+> **Важно — конфаундинг.** Геноварианты сильно различаются по тяжести (медиана КТ 1 / 1 / 0),
+> возрасту (38 / 41 / 36) и охвату вакцинацией (0.5% / 30% / 89%). Поэтому **сырые** различия частот
+> осложнений нельзя приписывать самому штамму — нужна поправка на тяжесть и возраст.""")
+code("""
+import statsmodels.formula.api as smf
+from statsmodels.stats.multitest import multipletests
+from scipy.stats import chi2_contingency
+
+STRAINS = ['УХАНЬ', 'ДЕЛЬТА', 'ОМИКРОН']
+G = pd.concat([pd.read_excel(FILE_PATH, sheet_name=s, header=0).assign(strain=s)
+               for s in STRAINS], ignore_index=True)
+G['strain'] = pd.Categorical(G['strain'], categories=STRAINS, ordered=False)
+
+def gcol(i):
+    return pd.to_numeric(G.iloc[:, i], errors='coerce')
+def gbin(i):
+    return (gcol(i).fillna(0) > 0).astype(int)
+
+profile = pd.DataFrame({
+    'N': G['strain'].value_counts().reindex(STRAINS),
+    'КТ(ИТОГ), медиана': gcol(38).groupby(G['strain']).median().reindex(STRAINS),
+    'Возраст, медиана': gcol(2).groupby(G['strain']).median().reindex(STRAINS),
+    'Вакцинация, %': (gbin(10).groupby(G['strain']).mean() * 100).reindex(STRAINS).round(1),
+})
+print('Профиль геновариантов:')
+display(profile)
+""")
+
+md("## 5.1 Распространённость осложнений по геновариантам")
+code("""
+flags = pd.DataFrame({nm: gbin(i) for i, nm in COMP_IDX.items()})
+flags['strain'] = G['strain'].values
+prev_strain = (flags.groupby('strain').mean() * 100).reindex(STRAINS).round(1)
+print('Частота осложнения, % по геновариантам:')
+display(prev_strain.T)
+
+fig, ax = plt.subplots(figsize=(12, 6))
+prev_strain.T.plot(kind='bar', ax=ax, color=['#4575b4', '#fdae61', '#d73027'])
+ax.set_ylabel('Частота, %'); ax.set_xlabel('')
+ax.set_title('Частота поздних осложнений по геновариантам')
+ax.legend(title='Геновариант')
+plt.xticks(rotation=35, ha='right'); plt.tight_layout(); plt.show()
+""")
+
+md("""## 5.2 Различия частоты между штаммами (χ² + поправка на множественность)
+
+Критерий χ² для каждого осложнения через три штамма; p корректируется методом Бенджамини–Хохберга
+(FDR) на семейство тестов.""")
+code("""
+chi_targets = {OVERALL_IDX: 'Любое осложнение'}
+chi_targets.update(COMP_IDX)
+chi_rows = []
+for i, nm in chi_targets.items():
+    ct = pd.crosstab(G['strain'], gbin(i))
+    chi2, p, dof, exp = chi2_contingency(ct)
+    chi_rows.append([nm, round(chi2, 2), p, round(exp.min(), 1)])
+chi = pd.DataFrame(chi_rows, columns=['Осложнение', 'хи²', 'p', 'min ожид.'])
+chi['p (FDR)'] = multipletests(chi['p'], method='fdr_bh')[1]
+chi['вывод'] = np.where(chi['p (FDR)'] < 0.05, 'значимо', 'поисково')
+chi = chi.sort_values('p').reset_index(drop=True)
+display(chi.round({'p': 4, 'p (FDR)': 4}))
+""")
+md("""Минимальные ожидаемые частоты во всех таблицах ≥ 5 (даже для ОНМК/ИМ — 7.3), поэтому χ²-приближение
+корректно; ограничение — малое **число событий** в редких осложнениях (низкая мощность). После
+FDR-поправки порог различий между штаммами выдерживает только **зрение/слух**; психоневрологические
+осложнения (p≈0.02), пневмофиброз (p≈0.03) и ССЗ (p≈0.05) — поисковые.""")
+
+md("""## 5.3 Сравнение с поправкой на тяжесть и возраст
+
+Логистическая модель `осложнение ~ C(штамм) + КТ(ИТОГ) + возраст` (референс — Ухань). **Вакцинация
+исключена из основной модели**: она почти коллинеарна штамму (0.5/30/89%), и её включение делает
+эффект штамма неразделимым. Для зрения/слуха дополнительно показана модель чувствительности
+с вакцинацией.""")
+code("""
+adf = pd.DataFrame({'strain': G['strain'].values, 'KT': gcol(38).values,
+                    'age': gcol(2).values, 'vac': gbin(10).values})
+adj_targets = {OVERALL_IDX: 'Любое осложнение', 140: 'Повторные пневмонии',
+               144: 'ЖКТ / НЖБП', 130: 'ССЗ (новые)', 135: 'Зрение / слух'}
+rows = []
+for i, nm in adj_targets.items():
+    adf['y'] = gbin(i).values
+    m = smf.logit('y ~ C(strain) + KT + age', data=adf).fit(disp=0)
+    for lvl in ['ДЕЛЬТА', 'ОМИКРОН']:
+        k = 'C(strain)[T.' + lvl + ']'
+        ci = np.exp(m.conf_int().loc[k])
+        rows.append([nm, int(adf['y'].sum()), lvl, np.exp(m.params[k]),
+                     ci.iloc[0], ci.iloc[1], m.pvalues[k]])
+adj = pd.DataFrame(rows, columns=['Осложнение', 'событий', 'vs Ухань', 'OR', 'ДИ low', 'ДИ high', 'p'])
+print('Скорректированные OR геноварианта (vs Ухань):')
+display(adj.round(3))
+
+fig, ax = plt.subplots(figsize=(8.5, 6.5))
+ypos = 0; yt = []; yl = []
+for nm in adj_targets.values():
+    for lvl, c in [('ДЕЛЬТА', '#4575b4'), ('ОМИКРОН', '#d73027')]:
+        r = adj[(adj['Осложнение'] == nm) & (adj['vs Ухань'] == lvl)].iloc[0]
+        ax.errorbar(r['OR'], ypos, xerr=[[r['OR'] - r['ДИ low']], [r['ДИ high'] - r['OR']]],
+                    fmt='o', color=c, capsize=3)
+        yt.append(ypos); yl.append(nm + ' — ' + lvl); ypos += 1
+    ypos += 0.6
+ax.axvline(1, color='k', ls='--', lw=0.8)
+ax.set_yticks(yt); ax.set_yticklabels(yl, fontsize=8)
+ax.set_xscale('log'); ax.set_xlabel('Скорр. OR vs Ухань (лог. шкала)')
+ax.set_title('Эффект геноварианта с поправкой на тяжесть и возраст')
+plt.tight_layout(); plt.show()
+
+adf['y'] = gbin(135).values
+ms = smf.logit('y ~ C(strain) + KT + age + vac', data=adf).fit(disp=0)
+ko = 'C(strain)[T.ОМИКРОН]'
+print('Чувствительность (зрение/слух, +вакцинация): Омикрон vs Ухань OR=%.2f (p=%.3f); '
+      'вакцинация OR=%.2f (p=%.3f) -> эффект Омикрона устойчив.'
+      % (np.exp(ms.params[ko]), ms.pvalues[ko], np.exp(ms.params['vac']), ms.pvalues['vac']))
+""")
+md("""После поправки на тяжесть и возраст **геновариант сам по себе не повышает** общий риск поздних
+осложнений (Дельта и Омикрон vs Ухань — незначимо). Риск определяют тяжесть (КТ, OR≈2) и возраст
+(≈1.07/год). Устойчивое исключение — **снижение нарушений зрения/слуха при Омикроне** (скорр. OR≈0.30):
+этот сигнал значим и в χ² с FDR-поправкой (этап 5.2), и после поправки на тяжесть/возраст (этап 5.3 —
+здесь p приведены без поправки на множественность). Оценка опирается на 24 случая в омикроновском плече
+(в таблице 5.3 столбец «событий» = 147 — это объединённый по трём штаммам счёт) и неотделима от
+вакцинации/календарного периода. Сигнал «больше новых ССЗ при Омикроне» (OR≈1.8, p≈0.03) — поисковый,
+FDR-поправку не проходит.""")
+
+md("""## 5.4 Предикторы осложнений внутри каждого штамма (поисковая карта)
+
+Однофакторные OR общего риска отдельно в каждом штамме. Непрерывные факторы — OR **на 1 SD внутри
+штамма** (разные абсолютные шаги, между штаммами в абсолюте не сравнимы), бинарные — наличие/отсутствие.""")
+code("""
+CONT_F = {'Возраст': 2, 'ИМТ': 31, 'HOMA': 114, '%КТ макс': 39, 'ДН (0-3)': 103}
+BIN_F = {'ОРДС': 109, 'ГКС': 92, 'Вакцинация': 10, 'Бактер. осложн.': 119}
+
+def strain_or(y, x, continuous):
+    # возвращает (OR, аннотация); помечает неоценимые/неустойчивые ячейки
+    if not continuous:
+        nexp = int((x == 1).sum())
+        if nexp < 5 or nexp > len(x) - 5:
+            return np.nan, 'н/о'
+        mincell = pd.crosstab(x, y).values.min()
+    xv = (x - x.mean()) / x.std() if continuous else x.astype(float)
+    try:
+        r = sm.Logit(y, sm.add_constant(pd.DataFrame({'x': xv}))).fit(disp=0)
+        orr = float(np.exp(r.params.iloc[1]))
+    except Exception:
+        return np.nan, 'н/о'
+    if not continuous and mincell < 5:
+        return orr, ('↑↑ неуст.' if orr > 1 else '↓↓ неуст.')
+    return orr, ('%.2f' % orr)
+
+rows_idx = list(CONT_F) + list(BIN_F)
+or_strain = pd.DataFrame(index=rows_idx, columns=STRAINS, dtype=float)
+ann_strain = pd.DataFrame(index=rows_idx, columns=STRAINS, dtype=object)
+for s in STRAINS:
+    sub = G[G['strain'] == s]
+    y = (pd.to_numeric(sub.iloc[:, OVERALL_IDX], errors='coerce').fillna(0) > 0).astype(int)
+    for nm, idx in CONT_F.items():
+        x = pd.to_numeric(sub.iloc[:, idx], errors='coerce'); x = x.fillna(x.median())
+        o, a = strain_or(y, x, True); or_strain.loc[nm, s] = o; ann_strain.loc[nm, s] = a
+    for nm, idx in BIN_F.items():
+        x = (pd.to_numeric(sub.iloc[:, idx], errors='coerce').fillna(0) > 0).astype(int)
+        o, a = strain_or(y, x, False); or_strain.loc[nm, s] = o; ann_strain.loc[nm, s] = a
+
+fig, ax = plt.subplots(figsize=(7.5, 7))
+sns.heatmap(np.log2(or_strain.astype(float)).clip(-3, 3), annot=ann_strain.values, fmt='',
+            cmap='RdBu_r', center=0, linewidths=0.5, cbar_kws={'label': 'log2(OR)'},
+            annot_kws={'fontsize': 9}, ax=ax)
+ax.set_title('Однофакторные OR общего риска внутри штамма (н/о — не оценимо)')
+plt.yticks(rotation=0); plt.tight_layout(); plt.show()
+""")
+md("""Карта **поисковая** (без поправок и множественной коррекции). Основные предикторы (возраст, ИМТ,
+HOMA, бактериальные осложнения) работают во всех штаммах. OR вакцинации в Ухане не оценим (вакцинирован
+1 из 213 — разделение); OR для ОРДС внутри штаммов помечены как неустойчивые (ОРДС-позитивных всего
+25 / 36 / 13; формальный критерий — минимальная клетка таблицы 2×2 < 5). Ослабление КТ/ДН/ГКС при
+Омикроне частично отражает сужение диапазона тяжести
+(медиана КТ = 0), а не обязательно иную биологию.""")
+
+# ============================================================ STAGE 6 risk schemes
+md("""# ЭТАП 6. Клинические схемы риска поздних осложнений
+
+Компактные «схемы» (≤ 5–10 признаков) для трёх осложнений, каждая в двух читаемых формах:
+**Форма A — дерево решений** (видны пороги-ветвления и риск в листьях) и **Форма B — балльная шкала**
+(порог по каждому признаку и баллы по вкладу в логистическую модель).
+
+> **Поисковый характер.** 3 цели × панель из ~8 признаков, отбор признаков по |β|, пороги по Юдену на
+> той же выборке, банды по квантилям — это перебор на n=755, **завышающий видимую эффективность** всех
+> трёх схем (особенно ОНМК/ИМ, где всего 26 событий). Поэтому рядом с in-sample-метрикой всегда
+> приводится кросс-валидированный AUC. Схемы — **ориентировочные**, требуют внешней проверки.""")
+code("""
+from sklearn.tree import DecisionTreeClassifier, plot_tree
+from sklearn.metrics import roc_auc_score, roc_curve
+
+def _f(i):
+    s = col(i); return s.fillna(s.median())
+
+PANEL = pd.DataFrame({
+    'Возраст': _f(2),
+    'Пол (жен.)': (col(3) == 2).astype(int),
+    'ИМТ': _f(31),
+    'HOMA': _f(114),
+    'ТГ': _f(69),
+    'Холестерин': col(70).clip(upper=15).fillna(col(70).median()),
+    'Глюкоза макс': _f(66),
+    '%КТ макс': _f(39),
+    'Д-димер': _f(76),
+    'СРБ': _f(74),
+    'Ферритин': _f(75),
+})
+SCHEME_TARGETS = {
+    'ОНМК / ИМ': (141, ['Возраст', 'Пол (жен.)', 'ИМТ', 'Глюкоза макс', '%КТ макс']),
+    'Повторные пневмонии': (140, ['Возраст', 'Пол (жен.)', 'ИМТ', 'HOMA', 'ТГ', 'Холестерин', 'Глюкоза макс', '%КТ макс']),
+    'Тромбозы / операции на венах': (132, ['Возраст', 'Пол (жен.)', 'ИМТ', 'Д-димер', '%КТ макс', 'СРБ', 'Глюкоза макс']),
+}
+
+def _youden(y, x, binary):
+    if binary:
+        return 0.5
+    fpr, tpr, thr = roc_curve(y, x)
+    return thr[np.argmax(tpr - fpr)]
+
+def build_scorecard(y, Xp):
+    cuts = {}; Xb = pd.DataFrame(index=Xp.index)
+    for c in Xp.columns:
+        binary = (c == 'Пол (жен.)'); cut = _youden(y, Xp[c], binary); cuts[c] = cut
+        Xb[c] = Xp[c] if binary else (Xp[c] > cut).astype(int)
+    r = sm.Logit(y, sm.add_constant(Xb)).fit(disp=0)
+    betas = r.params.drop('const')
+    kept = betas[betas.abs() >= 0.10]          # отбрасываем незначимые до расчёта делителя
+    div = kept[kept > 0].min()
+    pts = {c: max(0, int(round(kept[c] / div))) for c in kept.index}  # защитные признаки -> 0 баллов
+    score = sum(Xb[c] * pts[c] for c in pts)
+    return cuts, pts, score
+
+def scheme_cv_auc(y, Xp):
+    skf = StratifiedKFold(5, shuffle=True, random_state=RANDOM_STATE)
+    al, at = [], []
+    for tr, te in skf.split(Xp, y):
+        ytr, yte = y.iloc[tr], y.iloc[te]
+        Xtr = pd.DataFrame(); Xte = pd.DataFrame()
+        for c in Xp.columns:
+            binary = (c == 'Пол (жен.)'); cut = _youden(ytr, Xp[c].iloc[tr], binary)
+            Xtr[c] = Xp[c].iloc[tr].values if binary else (Xp[c].iloc[tr].values > cut).astype(int)
+            Xte[c] = Xp[c].iloc[te].values if binary else (Xp[c].iloc[te].values > cut).astype(int)
+        lm = LogisticRegression(max_iter=1000, class_weight='balanced').fit(Xtr, ytr)
+        al.append(roc_auc_score(yte, lm.predict_proba(Xte)[:, 1]))
+        tm = DecisionTreeClassifier(max_depth=3, min_samples_leaf=20, class_weight='balanced',
+                                    random_state=RANDOM_STATE).fit(Xp.iloc[tr], ytr)
+        at.append(roc_auc_score(yte, tm.predict_proba(Xp.iloc[te])[:, 1]))
+    return (np.mean(al), np.std(al)), (np.mean(at), np.std(at))
+
+SCHEMES = {}
+
+def render_scheme(nm):
+    idx, feats = SCHEME_TARGETS[nm]
+    y = (col(idx).fillna(0) > 0).astype(int)
+    Xp = PANEL[feats]
+    n_ev = int(y.sum())
+    tree = DecisionTreeClassifier(max_depth=3, min_samples_leaf=20, class_weight='balanced',
+                                  random_state=RANDOM_STATE).fit(Xp, y)
+    cuts, pts, score = build_scorecard(y, Xp)
+    (cvl, cvls), (cvt, cvts) = scheme_cv_auc(y, Xp)
+    app = roc_auc_score(y, score)
+    SCHEMES[nm] = {'n_ev': n_ev, 'app': app, 'cvl': cvl, 'cvls': cvls, 'cvt': cvt, 'cvts': cvts}
+
+    def thr_label(c):
+        return 'женский пол' if c == 'Пол (жен.)' else '> %.1f' % cuts[c]
+    card = pd.DataFrame({'Порог': [thr_label(c) for c in pts], 'Баллы': [pts[c] for c in pts]},
+                        index=list(pts))
+    print('=== %s: событий=%d, EPV=%.1f ===' % (nm, n_ev, n_ev / len(feats)))
+    print('AUC: баллы (in-sample)=%.3f | логит CV=%.3f±%.3f | дерево CV=%.3f±%.3f'
+          % (app, cvl, cvls, cvt, cvts))
+    display(card)
+
+    fig = plt.figure(figsize=(16, 6))
+    ax1 = fig.add_axes([0.0, 0.0, 0.66, 1.0]); ax2 = fig.add_axes([0.74, 0.12, 0.24, 0.78])
+    plot_tree(tree, feature_names=feats, filled=True, proportion=True,
+              class_names=['нет', 'да'], rounded=True, fontsize=8, ax=ax1)
+    ax1.set_title('Форма A — дерево решений: %s' % nm, fontsize=11)
+    band = pd.qcut(score, 4, duplicates='drop')
+    rb = pd.DataFrame({'band': band, 'y': y.values}).groupby('band', observed=True)['y'].agg(['mean', 'size'])
+    rb['risk'] = rb['mean'] * 100
+    ax2.bar(range(len(rb)), rb['risk'], color='#c0392b')
+    ax2.set_xticks(range(len(rb)))
+    ax2.set_xticklabels([str(b) for b in rb.index], rotation=30, ha='right', fontsize=7)
+    for i, (rk, sz) in enumerate(zip(rb['risk'], rb['size'])):
+        ax2.text(i, rk + 0.4, '%.0f%%\\nn=%d' % (rk, sz), ha='center', fontsize=7)
+    ax2.set_ylabel('Риск, %'); ax2.set_title('Форма B — риск по сумме баллов', fontsize=10)
+    plt.show()
+
+print('Схемы готовы к построению; панель из %d признаков' % PANEL.shape[1])
+""")
+
+md("""## 6.1 ОНМК / ИМ
+
+Всего **26 событий** (EPV ≈ 5) — схема **ориентировочная, гипотезо-порождающая**. Корневой признак
+(возраст) воспроизводим; глубокие листья и AUC между фолдами нестабильны.""")
+code("render_scheme('ОНМК / ИМ')")
+
+md("""## 6.2 Повторные пневмонии
+
+171 событие; ведущий профиль — **метаболический** (HOMA, возраст, ИМТ). Холестерин и %КТ исключены
+из шкалы как незначимые (|β| < 0.10).""")
+code("render_scheme('Повторные пневмонии')")
+
+md("""## 6.3 Тромбозы / операции на венах
+
+Позднее осложнение (`вены/опер`, idx 132, блок `DZ..EO`; 52 случая) — поздний венозный исход
+(тромбозы / операции на венах). Это **прогностическая** схема: предикторы (Д-димер, СРБ, %КТ, ИМТ и др.)
+измерены в исходном/остром периоде, **до** позднего исхода — утечки нет. Ведущий признак —
+**Д-димер** (маркер тромбообразования).""")
+code("render_scheme('Тромбозы / операции на венах')")
+
+md("""## 6.4 Валидация схем — внутривыборочный против кросс-валидированного AUC
+
+Кросс-валидация (5-блочная стратифицированная) с **переотбором порогов Юдена внутри каждого
+обучающего фолда** (честная оценка). Балльная шкала с целочисленными весами — приближение
+логистической модели, её AUC приводится отдельно.
+
+> Примечание: для редких исходов (ОНМК/ИМ, тромбозы) часть квантильных границ суммы баллов совпадает,
+> и банды риска схлопываются до трёх — это не пропущенная группа, а малое число различающихся сумм баллов.""")
+code("""
+auc_tbl = pd.DataFrame({
+    'Событий': {nm: SCHEMES[nm]['n_ev'] for nm in SCHEMES},
+    'AUC баллов (in-sample)': {nm: round(SCHEMES[nm]['app'], 3) for nm in SCHEMES},
+    'Логит CV-AUC': {nm: '%.3f ± %.3f' % (SCHEMES[nm]['cvl'], SCHEMES[nm]['cvls']) for nm in SCHEMES},
+    'Дерево CV-AUC': {nm: '%.3f ± %.3f' % (SCHEMES[nm]['cvt'], SCHEMES[nm]['cvts']) for nm in SCHEMES},
+})
+display(auc_tbl)
+""")
+md("""**Итог по схемам.** Тромбозы / операции на венах (позднее осложнение, 52 случая) — CV-AUC ≈0.82 (логит),
+ведущий предиктор Д-димер. Повторные пневмонии — умеренная схема (CV-AUC ≈0.67), метаболический профиль. ОНМК/ИМ —
+ориентировочная (CV-AUC ≈0.80±0.07 у логистической, ≈0.77±0.09 у дерева, 26 событий). Все схемы валидированы
+**только внутри выборки** (n=755), без поправки на штамм/эру и без внешней валидации; «нулевой риск»
+в нижних бандах — это верхняя граница ~0.6–0.8% (правило трёх), а не гарантированное отсутствие риска.""")
+
 # ============================================================ conclusions
 md("""# Выводы
 
 **Этап 1 — тяжесть.** Частота всех поздних осложнений статистически значимо растёт с тяжестью
 лёгочного поражения (тренд по КТ, p < 0.001 для каждого исхода). Сильнее всего от тяжести зависят
-**пневмофиброз** (КТ0 0.7% → КТ3–4 ≈30%), **ОНМК/ИМ** (1% → 12.5%), **операции на венах** и
-**ХОБЛ/астма**. ЖКТ/НЖБП и повторные пневмонии — самые частые исходы (25% и 23%), также нарастающие
+**пневмофиброз** (КТ0 0.7% → КТ3–4 ≈30%), **ОНМК/ИМ** (1% → 12.5%), **зрение/слух**, **ХОБЛ/астма**
+и **операции на венах**. ЖКТ/НЖБП и повторные пневмонии — самые частые исходы (25% и 23%), также нарастающие
 с тяжестью.
 
 **Основные признаки риска (любое осложнение).** По **однофакторным** OR сильнее всего с риском
@@ -815,6 +1161,24 @@ md("""# Выводы
 **Панкреонекроз (этап 4).** Всего 8 случаев — для воспроизводимой прогнозной модели данных
 недостаточно (нужно ≥10 событий на предиктор и панкреас-специфичные маркеры). Приведён описательный
 разбор; прогноз станет возможен по мере накопления случаев.
+
+**Новые осложнения.** В анализ добавлены ещё два поздних исхода: **зрение/слух** (19.5%, частый) и
+**психоневрологические нарушения / обоняние** (10.3%); оба проведены через этапы 1–3 и 5. Зрение/слух —
+ведущий результат этапа 5 (единственное осложнение, выдерживающее FDR-поправку по штаммам).
+
+**Геноварианты (этап 5).** Геновариант сам по себе не определяет частоту поздних осложнений: после
+поправки на тяжесть (КТ) и возраст ни Дельта, ни Омикрон не дают независимого избытка риска по общему
+флагу — риск определяют тяжесть (КТ OR≈2) и возраст (≈1.07/год). Единственное устойчивое штамм-
+специфичное отличие — **снижение нарушений зрения/слуха при Омикроне** (8.9% против 23.9–26.5%,
+выдерживает FDR-поправку; держится на 24 событиях и неотделимо от вакцинации/календарного периода).
+Различия по психоневрологии, пневмофиброзу и ССЗ — поисковые, поправку не проходят. Сырые сравнения
+конфаундированы (КТ 1/1/0, возраст 38/41/36, вакцинация 0.5/30/89%; вакцинация коллинеарна штамму).
+
+**Клинические схемы (этап 6).** Схема повторных пневмоний (метаболический профиль HOMA/возраст/ИМТ,
+CV-AUC≈0.67) — умеренная; схема ОНМК/ИМ (26 событий, CV-AUC≈0.80) — ориентировочная. Схема тромбозов /
+операций на венах (idx 132, позднее осложнение, 52 случая) — прогностическая, ведущий предиктор Д-димер,
+CV-AUC≈0.82. Все схемы валидированы только in-sample, пороги подобраны на той
+же выборке, без поправки на штамм/эру — внешней валидации нет.
 
 **Методическое замечание.** Следует различать два режима. *Прогностические* метрики (этап 2.5) даны
 с кросс-валидацией и только для частых исходов. Деревья групп риска (2.6) и SHAP-разбор (3) применены
