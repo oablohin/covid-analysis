@@ -96,6 +96,14 @@ plt.rcParams['font.size'] = 10
 pd.set_option('display.float_format', lambda v: f'{v:,.3f}')
 RANDOM_STATE = 42
 
+def fmt_p(p):
+    """Отображение p/q для таблиц: очень малые — как <0.001, пропуски — как «—» (не применимо)."""
+    if pd.isna(p):
+        return '—'
+    if p < 0.001:
+        return '<0.001'
+    return f'{p:.3f}'
+
 # две группы по TyG: сравнение (низкий) и метаболический синдром (высокий)
 GROUPS = ['TyG < 8,5', 'TyG ≥ 8,5']
 GROUP_FULL = {'TyG < 8,5': 'TyG < 8,5 (сравнение)', 'TyG ≥ 8,5': 'TyG ≥ 8,5 (метаболический синдром)'}
@@ -213,7 +221,8 @@ for name, s in [('Женщины, %', (num(3) == 2).astype(int)), ('Вакцин
     cont_rows.append({'Признак': name, 'TyG < 8,5': f'{100*s[lo_m].mean():.1f}',
                       'TyG ≥ 8,5': f'{100*s[hi_m].mean():.1f}', 'p': prop_p(s)})
 chars = pd.DataFrame(cont_rows).set_index('Признак')
-print('Медиана [Q1; Q3] или %, p — Манна–Уитни / χ²(Фишер)')
+chars['p'] = chars['p'].map(fmt_p)
+print('Медиана [Q1; Q3] или %, p — Манна–Уитни / χ²(Фишер).  <0.001 — очень малое p (высокая значимость).')
 display(chars)
 print('Пол: женщины кодируются как «2». Порог TyG=8,5 для деления на группы.')
 ''')
@@ -286,7 +295,11 @@ if adj_ok.sum() >= 2:
 print('OR — шанс осложнения при TyG ≥ 8,5 относительно TyG < 8,5.')
 print('Скорректировано на возраст, пол, КТ%макс и вакцинацию.  † — мало событий (оценка неустойчива, широкий ДИ).')
 print('q (сырое) — FDR по сырым OR; q (скоррект.) — FDR по скорректированным OR (семьи контролируются раздельно).')
-display(freq.set_index('Осложнение'))
+print('<0.001 — очень малое p; «—» у «Любого осложнения» — оно не входит в FDR-семью из 4 исходов.')
+freq_disp = freq.copy()
+for _c in ['p', 'p ', 'q (сырое)', 'q (скоррект.)']:
+    freq_disp[_c] = freq_disp[_c].map(fmt_p)
+display(freq_disp.set_index('Осложнение'))
 ''')
 
 md("## 1.2 Диаграмма частот и «лес» отношений шансов (OR ≥ 8,5 vs < 8,5)")
@@ -425,12 +438,13 @@ for g in GROUPS:
             if not pd.isna(o) and not pd.isna(p) and p < 0.05:
                 srows.append({'Группа': GROUP_FULL[g], 'Признак': f, 'Осложнение': cn,
                               'OR': round(o, 2), '95% ДИ': f'{ci[0]:.2f}–{ci[1]:.2f}',
-                              'p': round(p, 4), 'q (FDR)': round(qq, 4),
+                              'p': p, 'q (FDR)': qq,
                               'FDR': '✓' if qq < 0.05 else '—',
                               'направление': '↑ риск' if o > 1 else '↓ риск'})
-sig = pd.DataFrame(srows).sort_values(['Группа', 'Осложнение', 'p'])
+sig = pd.DataFrame(srows).sort_values(['Группа', 'Осложнение', 'p']).reset_index(drop=True)
+sig['p'] = sig['p'].map(fmt_p); sig['q (FDR)'] = sig['q (FDR)'].map(fmt_p)
 print('Однофакторные связи «признак → осложнение» с p<0,05 (OR/SD, кроме Пол = жен vs муж); ✓ — прошли FDR (q<0,05):')
-display(sig.reset_index(drop=True))
+display(sig)
 ''')
 
 md("""**Как читать этап 2.** В каждой группе матрица показывает, какие признаки острого периода повышают
@@ -610,10 +624,12 @@ for m in DYN:
                      'Δ медиана (≥8,5)': dmed['TyG ≥ 8,5'], 'p (Манна–Уитни)': pbtw, 'знач.': star(pbtw)})
 dyn_tab = pd.DataFrame(dyn_rows).set_index(['Показатель', 'Группа'])
 btw_tab = pd.DataFrame(btw_rows).set_index('Показатель')
+dyn_disp = dyn_tab.round(3); dyn_disp['p (Вилкоксон)'] = dyn_tab['p (Вилкоксон)'].map(fmt_p)
+btw_disp = btw_tab.round(3); btw_disp['p (Манна–Уитни)'] = btw_tab['p (Манна–Уитни)'].map(fmt_p)
 print('Динамика ВНУТРИ групп (парный критерий Вилкоксона). *** p<0,001, ** p<0,01, * p<0,05, н.з. — незначимо.')
-display(dyn_tab.round(3))
+display(dyn_disp)
 print('\\nСравнение динамики Δ МЕЖДУ группами (критерий Манна–Уитни по индивидуальным изменениям):')
-display(btw_tab.round(3))
+display(btw_disp)
 
 # конверсия по TyG за 24 месяца
 tyg_l, tyg_e = num(159), num(70)
