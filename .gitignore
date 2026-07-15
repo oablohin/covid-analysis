@@ -1,0 +1,11 @@
+# Экспортированные отчёты (markdown) и картинки к ним
+*.md
+!README.md
+*.png
+*_files/
+
+# Исходные данные Excel
+*.xlsx
+
+# Артефакты WSL
+*Zone.Identifier
